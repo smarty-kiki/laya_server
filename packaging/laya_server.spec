@@ -39,14 +39,6 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 
-def _has_webview() -> bool:
-    try:
-        import webview  # noqa: F401
-    except ModuleNotFoundError:
-        return False
-    return True
-
-
 REPO = Path.cwd()
 assert (REPO / "laya_server" / "app.py").is_file(), "请在仓库根目录执行 pyinstaller"
 
@@ -72,8 +64,6 @@ hiddenimports = (
     # （_machsignals 这类）在特定路径上才会被导入。
     + collect_submodules("objc")
     + ["AppKit", "Foundation", "WebKit", "PyObjCTools", "PyObjCTools.AppHelper"]
-    # 原生窗口不可用时才回退到它，同样要打进去。
-    + (["webview"] if _has_webview() else [])
 )
 
 # 权重一律不打包：它们是运行时从 Hugging Face 拉的，体积几个 GB，

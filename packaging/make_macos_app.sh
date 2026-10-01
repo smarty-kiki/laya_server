@@ -12,7 +12,7 @@
 # 用法：
 #   packaging/make_macos_app.sh                 # 生成到 ~/Applications
 #   OUT_DIR=/tmp packaging/make_macos_app.sh    # 换输出目录
-#   packaging/make_macos_app.sh --window        # 默认用原生窗口（需要 pywebview）
+#   额外参数原样传给 laya-console（如 --port 9000 --no-native）
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

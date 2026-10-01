@@ -8,44 +8,33 @@
   4. 把「停止服务」这条线接上（控制台的 /admin/shutdown 落到 server.should_exit）
 
 **不自己实现界面。** UI 就是服务自带的那一页（`GET /`），启动器只是把它送进
-浏览器或原生窗口。这样只有一份前端代码，改一次两边都变；反过来，如果启动器
+原生窗口或浏览器。这样只有一份前端代码，改一次两边都变；反过来，如果启动器
 自己画一套，用户就会看到两个互相漂移的版本。
 
-原生窗口（WKWebView）走 `--window`，需要额外的 pywebview；没装就退回默认浏览器，
-并说清楚为什么 —— 静默降级会让人以为「窗口模式坏了」。
+界面只有两种打开方式：**原生窗口**（系统 WebKit，`laya_server/native.py`，装了
+pyobjc 就是默认）和 **`--no-native` 交给默认浏览器**。没有第三种 —— 曾经还有
+借 Chrome `--app=` / Safari AppleScript / pywebview 的三级回退，但那条链在窗口
+生命周期上误杀过服务（借来的进程不保证活到窗口关闭），且要求用户装特定浏览器，
+已整体删除。
 """
 
 from __future__ import annotations
 
 import argparse
 import contextlib
-import os
-import shutil
 import signal
 import socket
-import subprocess
 import sys
 import threading
 import time
 import webbrowser
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import Optional, Sequence
 
 from .config import AUTO_LOAD_MODES, HOME_DIR, Settings, load_settings
 
 DEFAULT_PORT_SCAN = 20
 HEALTH_TIMEOUT_S = 180.0
-
-#: Chromium 系浏览器按这个顺序找。用 `--app=` 打开会得到一个没有标签栏和地址栏的
-#: 独立窗口 —— 观感上就是个原生应用，而且不依赖 pywebview（它的 proxy-tools 依赖
-#: 在部分环境下装不上）。
-CHROMIUM_CANDIDATES = (
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-    "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
-    "/Applications/Chromium.app/Contents/MacOS/Chromium",
-    "/Applications/Arc.app/Contents/MacOS/Arc",
-)
 
 
 def port_available(host: str, port: int) -> bool:
@@ -126,124 +115,14 @@ def wait_until_ready(url: str, timeout: float = HEALTH_TIMEOUT_S) -> bool:
     return False
 
 
-@dataclass
-class UiHandle:
-    """打开界面之后留给调用方的东西。
+def open_in_browser(url: str) -> None:
+    """把控制台交给默认浏览器打开（`--no-native` 或原生壳不可用时的路径）。
 
-    只管**一个方向**：服务停了要顺手把窗口收掉（不然用户在页面上点了「停止服务」，
-    屏幕上还杵着一个连不上的死窗口）。
-
-    反方向 —— 「窗口关了就停服务」—— **刻意不做**。原因是 Chrome 的进程模型：
-    `--app=` 起出来的那个进程不保证活到窗口关闭，它可能只是把窗口转交给已经在跑的
-    浏览器主进程然后自己退出。拿它的退出当「窗口关了」的信号，会在用户刚用起来的时候
-    把服务杀掉。这个 bug 真实触发过：一次会话进行到一半，服务毫无征兆地没了。
-
-    判断一个信号可不可用，只看一条：它错了会怎样。服务多活一会儿，用户双击一次图标
-    就能连回来（见 main 里的 attach 逻辑）；服务被误杀，用户丢了正在看的东西还查不出原因。
-    所以宁可不做。
+    `webbrowser.open` 的返回值不可信 —— 它几乎永远返回 True，哪怕什么都没弹出来。
+    所以日志必须带上地址：「没看到页面」的时候至少有一个能手敲的 URL。
     """
-
-    mode: str  # "window" | "browser"
-    process: Optional[subprocess.Popen] = None
-
-    def close(self) -> None:
-        """关掉我们自己起的窗口。没抓到进程句柄就什么也不做 —— 那种情况下
-        窗口是浏览器主进程管的，硬关会连累用户其它标签页。"""
-        if self.process is None:
-            return
-        with contextlib.suppress(OSError):
-            self.process.terminate()
-
-
-def _open_with_pywebview(url: str) -> bool:
-    """pywebview 在 macOS 上必须占用主线程，所以这条路依然是阻塞的。
-    没装就算了 —— Chrome 的 `--app=` 已经够用，还不用多一个依赖。"""
-    try:
-        import webview  # type: ignore
-    except ModuleNotFoundError:
-        return False
-    try:
-        webview.create_window(
-            "laya-server 控制台", url, width=1180, height=820, min_size=(880, 600)
-        )
-        webview.start()
-    except Exception as exc:  # noqa: BLE001 —— 装了但起不来（缺 WebKit 绑定等）
-        print(f"[laya-console] pywebview 起窗口失败，改用浏览器：{exc}", flush=True)
-        return False
-    return True
-
-
-def _open_as_app_window(url: str) -> Optional[subprocess.Popen]:
-    """用 Chromium 系的 `--app=` 起一个无边框窗口（无标签栏、无地址栏）。
-
-    返回进程句柄，拿不到就返回 None。**不等它退出**：那个进程的寿命和窗口的寿命
-    不是一回事，等它只会让我们误判。
-    """
-    for candidate in CHROMIUM_CANDIDATES:
-        if not os.path.exists(candidate):
-            continue
-        try:
-            return subprocess.Popen(
-                [candidate, f"--app={url}", "--no-first-run", "--no-default-browser-check"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except OSError:
-            continue
-    return None
-
-
-def _open_with_safari(url: str) -> bool:
-    if not shutil.which("osascript"):
-        return False
-    script = f'tell application "Safari" to make new document with properties {{URL:"{url}"}}'
-    try:
-        result = subprocess.run(
-            ["osascript", "-e", script], capture_output=True, text=True, timeout=15
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return result.returncode == 0
-
-
-def open_ui(url: str, prefer_window: bool) -> UiHandle:
-    """打开界面（浏览器路径）。
-
-    **原生壳不在这里**：它会阻塞主线程跑 Cocoa 事件循环，没法「打开完就返回」。
-    见 `main` 里对 `native.run` 的调用。
-    """
-    if prefer_window:
-        try:
-            import webview  # noqa: F401
-        except ModuleNotFoundError:
-            pass
-        else:
-            if _open_with_pywebview(url):
-                return UiHandle(mode="window")
-
-        process = _open_as_app_window(url)
-        if process is not None:
-            print(
-                "[laya-console] 应用窗口已打开。窗口只是界面 —— 关掉它服务照常在后台跑，"
-                "再双击图标会连回来；要停服务请用页面底部的「停止服务」。",
-                flush=True,
-            )
-            return UiHandle(mode="window", process=process)
-        if _open_with_safari(url):
-            print("[laya-console] 没找到 Chromium 系浏览器，用 Safari 打开。", flush=True)
-            return UiHandle(mode="browser")
-        print(
-            "[laya-console] 没有可用的窗口方案，退回默认浏览器。"
-            " 想要独立应用窗口：pip install 'laya-server[desktop]'",
-            flush=True,
-        )
-
     webbrowser.open(url)
-    print(
-        "[laya-console] 已交给默认浏览器打开。如果没看到页面，手动访问下面的地址：",
-        flush=True,
-    )
-    return UiHandle(mode="browser")
+    print(f"[laya-console] 已交给默认浏览器。没看到页面就手动访问：{url}/", flush=True)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -270,9 +149,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="等价于 --auto-load all（保留这个写法，免得弄坏已经在用的启动脚本）。",
     )
     parser.add_argument("--api-key", help="设置后所有接口都要带 Authorization: Bearer <key>。")
-    parser.add_argument(
-        "--window", action="store_true", help="用独立应用窗口打开（无标签栏/地址栏）。"
-    )
     parser.add_argument(
         "--native",
         action="store_true",
@@ -332,7 +208,7 @@ def run_native_shell(url: str, *, wait_ready, on_quit) -> Optional[int]:
     if not native.available():
         print(
             "[laya-console] 没装 pyobjc，用不了原生壳（pip install "
-            "'laya-server[desktop]'）。退回浏览器路径。",
+            "'laya-server[native]'）。退回浏览器路径。",
             flush=True,
         )
         return None
@@ -390,8 +266,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             )
             if code is not None:
                 return code
-        handle = open_ui(base_url, prefer_window=False)
-        del handle  # 连上去的实例不归我们管，窗口关不关都不影响那个服务的生死
+        open_in_browser(base_url)
         return 0
 
     port = settings.port
@@ -469,29 +344,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             flush=True,
         )
 
-    handle: Optional[UiHandle] = None
     if not args.no_browser:
-        handle = open_ui(base_url, prefer_window=args.window)
-        if handle.mode != "window":
-            print(f"[laya-console] 界面地址：{base_url}/", flush=True)
+        open_in_browser(base_url)
 
     try:
         # 只等一件事：服务自己被停（控制台按钮 / 信号 / 崩溃）。
-        #
-        # 曾经这里还盯着「窗口进程退出」，据此判定用户关了窗口。那个信号不可靠 ——
-        # Chrome `--app=` 起出来的进程不保证活到窗口关闭（它可能把窗口转交给主进程
-        # 之后自己退出），于是服务会在会话中途被误杀。宁可不做：服务多活一会儿，
-        # 双击一次图标就能连回来；被误杀则是用户丢了正在看的东西还查不出原因。
+        # 原生壳路径到不了这里（它在上面阻塞到用户退出才返回），
+        # 浏览器路径下窗口归浏览器管，我们既不需要也不应该盯着它。
         while thread.is_alive():
             thread.join(timeout=0.5)
     except KeyboardInterrupt:
         request_shutdown()
         thread.join(timeout=10)
-
-    # 服务停了，把窗口也收掉 —— 不然用户在页面上点了「停止服务」，
-    # 屏幕上还杵着一个已经连不上的死窗口。拿不到窗口进程句柄就作罢（见 UiHandle）。
-    if handle is not None:
-        handle.close()
 
     print("[laya-console] 已停止。", flush=True)
     return 0

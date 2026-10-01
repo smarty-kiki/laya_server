@@ -19,14 +19,6 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "httpx>=0.27"]
 # macOS 原生壳：系统自带的 WebKit，不需要装任何浏览器。
-# 打包成 .app 前建议把 pywebview 删掉 —— 它的纯 Python 依赖 proxy-tools
-# 在部分环境下构建失败，而原生壳根本用不到它。
-desktop = [
-    "pywebview>=5.0",
-    "pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'",
-    "pyobjc-framework-WebKit>=10.0; sys_platform == 'darwin'",
-]
-# 只装原生壳依赖、不要 pywebview。
 native = [
     "pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'",
     "pyobjc-framework-WebKit>=10.0; sys_platform == 'darwin'",
