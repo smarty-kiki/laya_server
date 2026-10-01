@@ -1,0 +1,40 @@
+{
+  "_comment": [
+    "配置文件示例。复制成 server.json 放在工作目录下会被自动加载；",
+    "或显式指定：laya-server --config /path/to/this.json",
+    "优先级：命令行 > 环境变量（LAYA_SERVER_*）> 这个文件 > 内置默认值。",
+    "aliases 与 slots 必须成对出现：别名指到不存在的槽位会在启动时直接报错。"
+  ],
+  "host": "127.0.0.1",
+  "port": 8077,
+  "default_model": "jev-latest",
+  "backend": "mlx",
+  "dtype": "float16",
+  "batch_size": 16,
+  "hf_endpoint": null,
+  "hf_offline": false,
+  "max_concurrency": 1,
+  "queue_timeout_s": 120,
+  "max_loaded": 3,
+  "auto_load": "local",
+  "debug": false,
+  "docs": true,
+  "console": true,
+  "admin_local_only": true,
+  "stats_capacity": 1000,
+  "max_state_chars": 0,
+  "max_questions": 255,
+  "api_key": null,
+  "slots": {
+    "english": "aac6fef/laya-mlx",
+    "multilingual": "aac6fef/laya-multilingual-mlx",
+    "typed-decisions": "aac6fef/laya-typed-decisions-mlx"
+  },
+  "aliases": {
+    "jev-latest": "english",
+    "jev-1.13.0": "english",
+    "jev-preview": "english",
+    "laya-multilingual": "multilingual",
+    "laya-typed-decisions": "typed-decisions"
+  }
+}

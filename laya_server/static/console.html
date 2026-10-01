@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>laya-server 控制台</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --panel:#fff; --panel-2:#fbfbfc; --line:#e4e6eb; --line-strong:#d3d6dc;
+    --fg:#1c1e21; --fg-2:#5a5f68; --fg-3:#8b9098;
+    --accent:#2f6feb; --accent-soft:#eaf1fe;
+    --ok:#12805c; --ok-soft:#e4f4ee; --warn:#a35a00; --warn-soft:#fdf1e0;
+    --bad:#c0392b; --bad-soft:#fdecea;
+    --radius:10px; --shadow:0 1px 2px rgba(16,24,40,.05),0 1px 3px rgba(16,24,40,.06);
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#16181c; --panel:#1e2126; --panel-2:#22252b; --line:#2f333a; --line-strong:#3d424a;
+      --fg:#e8eaed; --fg-2:#a8aeb8; --fg-3:#787e88;
+      --accent:#6b9bff; --accent-soft:#1d283c;
+      --ok:#4cc79a; --ok-soft:#17322a; --warn:#e0a458; --warn-soft:#33281a;
+      --bad:#f0776a; --bad-soft:#3a1f1c;
+      --shadow:0 1px 2px rgba(0,0,0,.35);
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:14px/1.55 -apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",Arial,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  a{color:var(--accent);text-decoration:none}
+  code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px}
+
+  header{position:sticky;top:0;z-index:10;background:var(--panel);border-bottom:1px solid var(--line);
+    padding:14px 24px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  header h1{font-size:15px;margin:0;font-weight:600;letter-spacing:.2px}
+  header .sep{flex:1}
+  .pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;
+    font-size:12px;font-weight:500;background:var(--panel-2);border:1px solid var(--line);color:var(--fg-2)}
+  .pill.ok{background:var(--ok-soft);border-color:transparent;color:var(--ok)}
+  .pill.bad{background:var(--bad-soft);border-color:transparent;color:var(--bad)}
+  .dot{width:7px;height:7px;border-radius:50%;background:currentColor}
+
+  main{max-width:1180px;margin:0 auto;padding:22px 24px 80px;display:flex;flex-direction:column;gap:22px}
+  section{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}
+  section>h2{margin:0;padding:14px 18px;font-size:13px;font-weight:600;letter-spacing:.3px;
+    color:var(--fg-2);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
+  section>h2 .sep{flex:1}
+  .body{padding:16px 18px}
+
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));gap:12px}
+  .card{background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:12px 14px;min-height:76px}
+  .card .k{font-size:11.5px;color:var(--fg-3);letter-spacing:.3px}
+  .card .v{font-size:21px;font-weight:600;margin-top:3px;font-variant-numeric:tabular-nums;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .card .v.sm{font-size:15px;padding-top:3px}
+  .card .s{font-size:11.5px;color:var(--fg-3);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+  th{font-size:11.5px;color:var(--fg-3);font-weight:500;letter-spacing:.3px}
+  tbody tr:last-child td{border-bottom:0}
+  tbody tr:hover{background:var(--panel-2)}
+  .scroll{overflow-x:auto}
+  .tag{display:inline-block;padding:1px 7px;border-radius:5px;font-size:11.5px;font-weight:500;
+    background:var(--panel-2);border:1px solid var(--line);color:var(--fg-2)}
+  .tag.ok{background:var(--ok-soft);color:var(--ok);border-color:transparent}
+  .tag.bad{background:var(--bad-soft);color:var(--bad);border-color:transparent}
+  .tag.warn{background:var(--warn-soft);color:var(--warn);border-color:transparent}
+  .tag.accent{background:var(--accent-soft);color:var(--accent);border-color:transparent}
+
+  button{font:inherit;font-size:13px;padding:6px 13px;border-radius:7px;border:1px solid var(--line-strong);
+    background:var(--panel);color:var(--fg);cursor:pointer;transition:background .12s,border-color .12s}
+  button:hover:not(:disabled){background:var(--panel-2)}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  button.primary:hover:not(:disabled){filter:brightness(1.08);background:var(--accent)}
+  button.danger{color:var(--bad);border-color:var(--bad)}
+  button.sm{padding:3px 9px;font-size:12px}
+
+  label.row{display:grid;grid-template-columns:190px 1fr;gap:12px;align-items:start;padding:9px 0;border-bottom:1px solid var(--line)}
+  label.row:last-child{border-bottom:0}
+  .lbl{font-size:13px;font-weight:500;padding-top:5px}
+  .lbl .name{display:block;font-size:11px;color:var(--fg-3);font-weight:400;font-family:ui-monospace,Menlo,monospace}
+  input[type=text],input[type=number],input[type=password],textarea,select{
+    width:100%;font:inherit;font-size:13px;padding:5px 9px;border-radius:7px;
+    border:1px solid var(--line-strong);background:var(--panel);color:var(--fg)}
+  input:focus,textarea:focus,select:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
+  textarea{font-family:ui-monospace,Menlo,monospace;font-size:12px;min-height:64px;resize:vertical}
+  .hint{font-size:11.5px;color:var(--fg-3);margin-top:3px}
+  .changed{color:var(--accent);font-size:11.5px;margin-left:6px}
+  .check{display:flex;align-items:center;gap:8px;padding-top:5px}
+  input[type=checkbox]{width:16px;height:16px;accent-color:var(--accent)}
+  .bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .bar .sep{flex:1}
+  .muted{color:var(--fg-3)}
+  .empty{padding:26px;text-align:center;color:var(--fg-3)}
+
+  #toast{position:fixed;right:22px;bottom:22px;display:flex;flex-direction:column;gap:8px;z-index:50;max-width:380px}
+  .toast{background:var(--panel);border:1px solid var(--line-strong);border-left:3px solid var(--accent);
+    border-radius:8px;padding:10px 13px;box-shadow:0 6px 20px rgba(16,24,40,.14);font-size:13px;
+    animation:in .16s ease-out}
+  .toast.ok{border-left-color:var(--ok)} .toast.bad{border-left-color:var(--bad)}
+  .toast .t{font-weight:600;margin-bottom:2px} .toast .d{color:var(--fg-2);font-size:12.5px;white-space:pre-wrap}
+  @keyframes in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+  .chart{width:100%;height:132px;display:block}
+  .legend{display:flex;gap:16px;font-size:11.5px;color:var(--fg-3);margin-top:6px}
+  .legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+</style>
+</head>
+<body>
+<header>
+  <h1>laya-server</h1>
+  <span class="pill" id="status-pill"><span class="dot"></span><span id="status-text">连接中…</span></span>
+  <span class="muted mono" id="addr">—</span>
+  <span class="muted" id="uptime">—</span>
+  <span class="sep"></span>
+  <label class="check" style="padding:0"><input type="checkbox" id="auto" checked><span class="muted">自动刷新</span></label>
+  <button id="refresh">刷新</button>
+</header>
+
+<main>
+  <section>
+    <h2>概览 <span class="sep"></span><span class="muted" id="last-updated"></span></h2>
+    <div class="body">
+      <div class="cards" id="cards"></div>
+      <div style="margin-top:16px">
+        <svg class="chart" id="chart" preserveAspectRatio="none"></svg>
+        <div class="legend">
+          <span><i style="background:var(--accent)"></i>每分钟请求数</span>
+          <span><i style="background:var(--bad)"></i>其中非 200</span>
+          <span><i style="background:var(--fg-3)"></i>p50 延迟（右轴示意，非等比例）</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>资源占用 <span class="sep"></span><span class="muted" id="sys-updated"></span></h2>
+    <div class="body">
+      <div class="cards" id="sys-cards"></div>
+      <div style="margin-top:16px">
+        <svg class="chart" id="sys-chart" preserveAspectRatio="none"></svg>
+        <div class="legend">
+          <span><i style="background:var(--accent)"></i>CPU</span>
+          <span><i style="background:var(--warn)"></i>GPU</span>
+          <span><i style="background:var(--ok)"></i>内存</span>
+          <span class="muted" id="sys-span"></span>
+        </div>
+      </div>
+      <div class="hint" id="sys-notes" style="margin-top:10px"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>模型
+      <span class="sep"></span>
+      <button class="sm" id="preload">预加载全部</button>
+      <button class="sm" id="unload">全部卸载</button>
+    </h2>
+    <div class="body scroll"><table id="models"><thead><tr>
+      <th>槽位</th><th>checkpoint</th><th>别名</th><th>状态</th><th></th>
+    </tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <section>
+    <h2>最近请求 <span class="sep"></span>
+      <span class="muted" id="req-count"></span>
+      <button class="sm" id="reset-stats">清空统计</button>
+    </h2>
+    <div class="body scroll"><table id="requests"><thead><tr>
+      <th>时间</th><th>模型</th><th>问题</th><th>答案</th><th>状态</th><th>总延迟</th><th>推理</th><th>tokens</th><th>request id</th>
+    </tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <section>
+    <h2>配置
+      <span class="sep"></span>
+      <span class="muted mono" id="config-path"></span>
+      <button class="sm" id="save">保存</button>
+      <button class="sm" id="reload">还原</button>
+    </h2>
+    <div class="body">
+      <div class="muted" style="margin-bottom:12px" id="config-note">
+        标 <span class="tag accent">立即生效</span> 的改完就起作用；标
+        <span class="tag warn">重启生效</span> 的会写进配置文件，下次启动才应用。
+      </div>
+      <div id="config-form"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>进程</h2>
+    <div class="body bar">
+      <button class="danger" id="shutdown">停止服务</button>
+      <span class="muted">停掉之后就没人应答这个地址了；重新启动要回到终端或双击应用。</span>
+    </div>
+  </section>
+</main>
+
+<div id="toast"></div>
+
+<script type="module">
+const $ = (sel) => document.querySelector(sel);
+const KEY_STORE = 'laya.console.apiKey';
+let configCache = null, autoTimer = null, busy = false;
+
+// ---------------------------------------------------------------- 基础设施
+function toast(title, detail = '', kind = '') {
+  const el = document.createElement('div');
+  el.className = 'toast ' + kind;
+  el.innerHTML = `<div class="t"></div><div class="d"></div>`;
+  el.querySelector('.t').textContent = title;
+  el.querySelector('.d').textContent = detail;
+  $('#toast').appendChild(el);
+  setTimeout(() => el.remove(), kind === 'bad' ? 8000 : 4200);
+}
+
+function authHeaders() {
+  const key = localStorage.getItem(KEY_STORE);
+  return key ? { Authorization: 'Bearer ' + key } : {};
+}
+
+async function api(path, options = {}) {
+  const res = await fetch(path, {
+    ...options,
+    headers: { 'Content-Type': 'application/json', ...authHeaders(), ...(options.headers || {}) },
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+  let payload = null;
+  try { payload = await res.json(); } catch { /* 空响应体是正常的 */ }
+  if (!res.ok) {
+    const err = new Error(payload?.error?.message || `HTTP ${res.status}`);
+    err.status = res.status;
+    err.code = payload?.error?.code;
+    throw err;
+  }
+  return payload;
+}
+
+// 401 时在控制台里就地要一次 key —— 让用户去翻配置文件太不体面。
+async function ensureAuth(err) {
+  if (err.status !== 401) return false;
+  const current = localStorage.getItem(KEY_STORE) || '';
+  const next = prompt('这个服务设了 API Key，控制台需要它才能读写管理接口。\n（会存在本机 localStorage 里，留空则清除）', current);
+  if (next === null) return false;
+  if (next.trim()) localStorage.setItem(KEY_STORE, next.trim());
+  else localStorage.removeItem(KEY_STORE);
+  return true;
+}
+
+async function call(path, options) {
+  try {
+    return await api(path, options);
+  } catch (err) {
+    if (await ensureAuth(err)) return await api(path, options);
+    throw err;
+  }
+}
+
+const fmtMs = (v) => (v === null || v === undefined ? '—' : v >= 1000 ? (v / 1000).toFixed(2) + 's' : v.toFixed(1) + 'ms');
+const fmtMB = (mb) => {
+  if (mb === null || mb === undefined) return '—';
+  return mb >= 1024 ? (mb / 1024).toFixed(2) + ' GB' : Math.round(mb) + ' MB';
+};
+const fmtPct = (v) => (v === null || v === undefined ? '—' : v.toFixed(1) + '%');
+const fmtTime = (s) => new Date(s * 1000).toLocaleTimeString('zh-CN', { hour12: false });
+const fmtUptime = (s) => {
+  if (s < 60) return Math.round(s) + ' 秒';
+  if (s < 3600) return Math.floor(s / 60) + ' 分 ' + Math.round(s % 60) + ' 秒';
+  return Math.floor(s / 3600) + ' 时 ' + Math.floor((s % 3600) / 60) + ' 分';
+};
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// ---------------------------------------------------------------- 概览
+// 值太长就换小一号字体，否则 21px 的等宽数字会把卡片撑破。
+function cardsHtml(cards) {
+  return cards.map(([k, v, s]) => {
+    const text = String(v ?? '');
+    const size = text.length > 11 ? ' sm' : '';
+    return `<div class="card"><div class="k">${esc(k)}</div>` +
+      `<div class="v${size}" title="${esc(text)}">${esc(text)}</div>` +
+      `<div class="s" title="${esc(s)}">${esc(s)}</div></div>`;
+  }).join('');
+}
+
+function renderCards(ov) {
+  const st = ov.stats;
+  const backend = ov.backend;
+  const loaded = (backend.loaded || []).length;
+  $('#cards').innerHTML = cardsHtml([
+    ['总请求', st.total, st.total ? `${st.succeeded} 成功 / ${st.failed} 失败` : '还没有请求'],
+    ['成功率', st.success_rate === null ? '—' : (st.success_rate * 100).toFixed(1) + '%',
+      st.total ? `失败 ${st.failed} 条` : '—'],
+    ['吞吐', st.throughput.count, `最近 ${st.throughput.window_s}s · 约 ${st.throughput.per_minute}/分钟`],
+    ['延迟 p50 / p99', `${fmtMs(st.latency_ms.p50)} / ${fmtMs(st.latency_ms.p99)}`, `最大 ${fmtMs(st.latency_ms.max)}`],
+    ['推理耗时 p50', fmtMs(st.inference_ms.p50), st.inference_ms.p50 === null ? '还没有成功的推理' : `p99 ${fmtMs(st.inference_ms.p99)}`],
+    ['已驻留模型', `${loaded} / ${(ov.models || []).length}`, backend.package || '—'],
+  ]);
+}
+
+// ---------------------------------------------------------------- 资源占用
+const SYS_POINTS = 60;      // 图上保留多少个点
+const SYS_INTERVAL_S = 3;   // 与控制台轮询间隔一致
+let sysHistory = [];
+
+function renderSystem(sys) {
+  const host = sys.host || {}, cpu = sys.cpu || {}, mem = sys.memory || {};
+  const gpu = sys.gpu || {}, mlx = sys.mlx || {}, proc = sys.process || {};
+  const cores = cpu.cores || host.cpu_cores;
+
+  $('#sys-cards').innerHTML = cardsHtml([
+    ['CPU', cpu.available ? fmtPct(cpu.percent) : '—',
+      cpu.available
+        ? `${cores} 核 · 负载 ${(cpu.load || []).map((v) => v.toFixed(2)).join(' / ') || '—'}`
+        : (cpu.reason || '不可用')],
+    ['内存', mem.available ? `${fmtMB(mem.used_mb)} / ${fmtMB(mem.total_mb)}` : '—',
+      mem.available
+        ? `占用 ${fmtPct(mem.percent)} · 可用 ${fmtMB(mem.available_mb)}`
+        : (mem.reason || '不可用')],
+    ['GPU 利用率', gpu.available ? gpu.percent + '%' : '—',
+      // 副标题要短：卡片宽度有限，写「Apple M1 · 8 核 · 显存占用 …」会被截成省略号，
+      // 而芯片名和上面那张 CPU 卡片是同一个，没必要占地方。
+      gpu.available
+        ? `${gpu.cores || '?'} 核 · 显存占用 ${fmtMB(gpu.in_use_mb)}`
+        : (gpu.reason || '不可用')],
+    ['MLX 显存', mlx.available ? fmtMB(mlx.active_mb) : '—',
+      mlx.available
+        ? `峰值 ${fmtMB(mlx.peak_mb)} · 缓存 ${fmtMB(mlx.cache_mb)}`
+        : '还没有加载任何权重'],
+    ['服务进程', proc.available ? fmtMB(proc.resident_mb) : '—',
+      proc.available ? `PID ${proc.pid} · 峰值 ${fmtMB(proc.peak_mb)}` : (proc.reason || '不可用')],
+  ]);
+
+  $('#sys-notes').textContent = (sys.notes || []).join('　');
+  // 标题栏顺手把芯片和采样时间写出来 —— 这些数字都是这台机器的，说清楚是哪台。
+  $('#sys-updated').textContent = [host.chip, sys.sampled_at ? '采样于 ' + fmtTime(sys.sampled_at) : '']
+    .filter(Boolean).join(' · ');
+}
+
+function pushSystemHistory(sys) {
+  const cpu = sys.cpu || {}, gpu = sys.gpu || {}, mem = sys.memory || {};
+  sysHistory.push({
+    at: Date.now() / 1000,
+    cpu: cpu.available ? cpu.percent : null,
+    gpu: gpu.available ? gpu.percent : null,
+    mem: mem.available ? mem.percent : null,
+  });
+  if (sysHistory.length > SYS_POINTS) sysHistory = sysHistory.slice(-SYS_POINTS);
+}
+
+function renderSystemChart() {
+  const svg = $('#sys-chart');
+  const W = 1000, H = 132, pad = 6, bottom = 20;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  if (sysHistory.length < 2) {
+    svg.innerHTML = `<text x="${W / 2}" y="${H / 2}" font-size="11" fill="var(--fg-3)" text-anchor="middle">再等几秒就有走势了</text>`;
+    $('#sys-span').textContent = '';
+    return;
+  }
+  const plotH = H - bottom - pad;
+  // 三个系列都是百分比，共用 0–100 的同一根轴，可以直接互相比较。
+  //
+  // x 从**右往左**排：最新的点永远贴着右边缘，历史向左延伸。刚打开页面时点很少，
+  // 如果按「从左往右铺满」画，前几个点会全挤在左边、看着像一条陡降的斜线。
+  const step = W / (SYS_POINTS - 1);
+  const count = sysHistory.length;
+  const x = (i) => W - (count - 1 - i) * step;
+  const y = (v) => pad + plotH - (Math.max(0, Math.min(100, v)) / 100) * plotH;
+
+  let grid = '';
+  for (const v of [0, 50, 100]) {
+    grid += `<line x1="0" y1="${y(v).toFixed(1)}" x2="${W}" y2="${y(v).toFixed(1)}" stroke="var(--line)"/>`;
+    grid += `<text x="4" y="${(y(v) - 3).toFixed(1)}" font-size="9.5" fill="var(--fg-3)">${v}%</text>`;
+  }
+
+  let paths = '';
+  for (const [key, color] of [['cpu', 'var(--accent)'], ['gpu', 'var(--warn)'], ['mem', 'var(--ok)']]) {
+    let d = '', started = false;
+    sysHistory.forEach((point, i) => {
+      const value = point[key];
+      if (value === null || value === undefined) { started = false; return; }
+      d += (started ? ' L' : ' M') + x(i).toFixed(1) + ' ' + y(value).toFixed(1);
+      started = true;
+    });
+    if (d) paths += `<path d="${d}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linejoin="round"/>`;
+  }
+
+  svg.innerHTML = grid + paths;
+  const span = sysHistory[sysHistory.length - 1].at - sysHistory[0].at;
+  $('#sys-span').textContent = `最近 ${Math.max(1, Math.round(span))} 秒 · 每 ${SYS_INTERVAL_S} 秒一点`;
+}
+
+function renderChart(series) {
+  const svg = $('#chart');
+  const W = 1000, H = 132, pad = 4, bottom = 20;
+  if (!series || !series.length) { svg.innerHTML = ''; return; }
+  const maxCount = Math.max(1, ...series.map((b) => b.count));
+  const maxP50 = Math.max(1, ...series.map((b) => b.p50 || 0));
+  const slot = W / series.length;
+  const barW = Math.max(2, slot * 0.62);
+  const plotH = H - bottom - pad;
+
+  const bars = series.map((b, i) => {
+    const x = i * slot + (slot - barW) / 2;
+    const h = b.count ? Math.max(2, (b.count / maxCount) * plotH) : 0;
+    const errH = b.errors ? Math.max(2, (b.errors / maxCount) * plotH) : 0;
+    const y = pad + plotH - h;
+    const parts = [];
+    if (h) parts.push(`<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" rx="2" fill="var(--accent)" opacity=".82"/>`);
+    if (errH) parts.push(`<rect x="${x.toFixed(1)}" y="${(pad + plotH - errH).toFixed(1)}" width="${barW.toFixed(1)}" height="${errH.toFixed(1)}" rx="2" fill="var(--bad)" opacity=".9"/>`);
+    return parts.join('');
+  }).join('');
+
+  // p50 用点连线，只做一个「有没有突然变慢」的目视提示；两张轴不等比例，不当作读数用。
+  const pts = series.map((b, i) => {
+    if (b.p50 === null) return null;
+    return [i * slot + slot / 2, pad + plotH - (b.p50 / maxP50) * plotH * 0.86];
+  });
+  let line = '';
+  for (let i = 1; i < pts.length; i++) {
+    if (!pts[i - 1] || !pts[i]) continue;
+    line += `<line x1="${pts[i - 1][0].toFixed(1)}" y1="${pts[i - 1][1].toFixed(1)}" x2="${pts[i][0].toFixed(1)}" y2="${pts[i][1].toFixed(1)}" stroke="var(--fg-3)" stroke-width="1" opacity=".55"/>`;
+  }
+  const labels = series.map((b, i) => {
+    if (i % 6 !== 0) return '';
+    return `<text x="${(i * slot + slot / 2).toFixed(1)}" y="${H - 5}" font-size="10" fill="var(--fg-3)" text-anchor="middle">${fmtTime(b.at).slice(0, 5)}</text>`;
+  }).join('');
+
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.innerHTML = `<line x1="0" y1="${pad + plotH}" x2="${W}" y2="${pad + plotH}" stroke="var(--line)"/>${bars}${line}${labels}`;
+}
+
+// ---------------------------------------------------------------- 模型
+function renderModels(rows) {
+  $('#models tbody').innerHTML = rows.map((m) => {
+    const state = m.error
+      ? `<span class="tag bad" title="${esc(m.error)}">加载失败</span>`
+      : m.loaded ? '<span class="tag ok">已驻留</span>' : '<span class="tag">未加载</span>';
+    const aliases = (m.aliases || []).slice(0, 4).map((a) => `<span class="tag">${esc(a)}</span>`).join(' ')
+      + ((m.aliases || []).length > 4 ? ` <span class="muted">+${m.aliases.length - 4}</span>` : '');
+    const action = m.loaded
+      ? `<button class="sm" data-unload="${esc(m.checkpoint)}">卸载</button>`
+      : `<button class="sm" data-preload="${esc(m.checkpoint)}">加载</button>`;
+    return `<tr>
+      <td>${m.slot ? esc(m.slot) : '<span class="muted">自定义</span>'}${m.default ? ' <span class="tag accent">默认</span>' : ''}</td>
+      <td class="mono">${esc(m.checkpoint)}</td>
+      <td>${aliases || '<span class="muted">—</span>'}</td>
+      <td>${state}</td>
+      <td style="text-align:right">${action}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="5" class="empty">没有配置任何槽位</td></tr>';
+}
+
+// ---------------------------------------------------------------- 最近请求
+function renderRequests(items) {
+  $('#req-count').textContent = items.length ? `显示最近 ${items.length} 条` : '';
+  if (!items.length) {
+    $('#requests tbody').innerHTML = '<tr><td colspan="9" class="empty">还没有请求。发一个 <code>POST /v1/systemone</code> 试试。</td></tr>';
+    return;
+  }
+  $('#requests tbody').innerHTML = items.map((r) => {
+    const ok = r.status === 200;
+    const types = Object.entries(r.answer_types || {}).map(([k, v]) => `${k}×${v}`).join(' ') || '—';
+    return `<tr>
+      <td class="mono">${fmtTime(r.at)}</td>
+      <td class="mono">${esc(r.model || r.model_alias || '—')}</td>
+      <td>${r.question_count || '—'}</td>
+      <td class="muted">${esc(types)}</td>
+      <td><span class="tag ${ok ? 'ok' : 'bad'}">${r.status}${r.error_code ? ' ' + esc(r.error_code) : ''}</span></td>
+      <td class="mono">${fmtMs(r.latency_ms)}</td>
+      <td class="mono muted">${fmtMs(r.inference_ms)}</td>
+      <td class="mono muted">${r.input_tokens || 0}</td>
+      <td class="mono muted">${esc(r.request_id)}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ---------------------------------------------------------------- 配置
+function renderConfig(cfg) {
+  configCache = cfg;
+  $('#config-path').textContent = cfg.config_file;
+  const groups = [
+    ['立即生效', cfg.hot_fields, 'accent'],
+    ['重启生效', cfg.cold_fields, 'warn'],
+  ];
+  const html = groups.map(([title, names, tag]) => {
+    const rows = names.filter((n) => cfg.fields[n]).map((name) => {
+      const meta = cfg.fields[name];
+      const value = cfg.values[name];
+      const changed = cfg.overridden.includes(name);
+      let input;
+      if (meta.kind === 'bool') {
+        input = `<label class="check"><input type="checkbox" data-field="${name}" data-kind="bool" ${value ? 'checked' : ''}><span class="muted">${value ? '开启' : '关闭'}</span></label>`;
+      } else if (meta.kind === 'choice') {
+        // 取值只有几档的字段（目前只有 auto_load）用下拉框：让人手打
+        // "local" 却打错成 "lcoal" 是最没必要的失败。
+        const options = (meta.choices || []).map((choice) =>
+          `<option value="${esc(choice)}"${String(value) === String(choice) ? ' selected' : ''}>${esc(choice)}</option>`
+        ).join('');
+        input = `<select data-field="${name}" data-kind="choice">${options}</select>`;
+      } else if (meta.kind === 'json') {
+        input = `<textarea data-field="${name}" data-kind="json">${esc(JSON.stringify(value, null, 2))}</textarea>`;
+      } else if (meta.kind === 'int' || meta.kind === 'float') {
+        input = `<input type="number" data-field="${name}" data-kind="${meta.kind}" value="${value ?? ''}" step="${meta.kind === 'float' ? '0.1' : '1'}">`;
+      } else {
+        input = `<input type="text" data-field="${name}" data-kind="text" value="${esc(value ?? '')}" autocomplete="off">`;
+      }
+      // 标签没配中文名时会等于字段名，这时再显示一行灰色的字段名就是重复。
+      const sub = meta.label === name ? '' : `<span class="name">${name}${changed ? '<span class="changed">已改</span>' : ''}</span>`;
+      return `<label class="row">
+        <span class="lbl">${esc(meta.label)}${sub}</span>
+        <span>${input}${meta.hint ? `<div class="hint">${esc(meta.hint)}</div>` : ''}</span>
+      </label>`;
+    }).join('');
+    return `<div style="margin-bottom:18px">
+      <div class="bar" style="margin-bottom:6px"><span class="tag ${tag}">${title}</span>
+      <span class="muted" style="font-size:12px">${names.length} 项</span></div>${rows}</div>`;
+  }).join('');
+  $('#config-form').innerHTML = html;
+}
+
+function collectConfig() {
+  const updates = {};
+  document.querySelectorAll('#config-form [data-field]').forEach((el) => {
+    const name = el.dataset.field, kind = el.dataset.kind;
+    const original = configCache.values[name];
+    let value;
+    if (kind === 'bool') value = el.checked;
+    else if (kind === 'json') {
+      const raw = el.value.trim();
+      value = raw === '' ? null : JSON.parse(raw); // 解析失败就抛出去，让调用方提示
+    } else if (kind === 'int') value = el.value === '' ? null : parseInt(el.value, 10);
+    else if (kind === 'float') value = el.value === '' ? null : parseFloat(el.value);
+    else value = el.value === '' && original === null ? null : el.value;
+    if (JSON.stringify(value) !== JSON.stringify(original)) updates[name] = value;
+  });
+  return updates;
+}
+
+// ---------------------------------------------------------------- 刷新
+async function refresh({ silent = false } = {}) {
+  if (busy) return;
+  busy = true;
+  try {
+    const [ov, stats, reqs, sys] = await Promise.all([
+      call('/admin/overview'),
+      call('/admin/stats'),
+      call('/admin/requests?limit=60'),
+      call('/admin/system'),
+    ]);
+    const pill = $('#status-pill');
+    pill.className = 'pill ok';
+    $('#status-text').textContent = '运行中';
+    $('#addr').textContent = ov.service.address;
+    $('#uptime').textContent = '已运行 ' + fmtUptime(ov.service.uptime_s);
+    $('#last-updated').textContent = '更新于 ' + fmtTime(Date.now() / 1000);
+    renderCards(ov);
+    renderChart(stats.series);
+    renderSystem(sys);
+    pushSystemHistory(sys);
+    renderSystemChart();
+    renderModels(ov.models);
+    renderRequests(reqs.items);
+    if (!configCache) renderConfig(await call('/admin/config'));
+  } catch (err) {
+    const pill = $('#status-pill');
+    pill.className = 'pill bad';
+    $('#status-text').textContent = err.status === 401 ? '需要 API Key' : '连接失败';
+    if (!silent) toast('刷新失败', err.message, 'bad');
+  } finally {
+    busy = false;
+  }
+}
+
+let autoWanted = true;
+function setAuto(on) {
+  if (autoTimer) clearInterval(autoTimer);
+  // 页面看不见的时候不要轮询。原生壳关掉窗口之后 WKWebView 仍然活着，
+  // 不判可见性的话它会每 3 秒打一次接口，直到进程退出 —— 纯浪费电。
+  autoWanted = on;
+  autoTimer = (on && document.visibilityState !== 'hidden')
+    ? setInterval(() => refresh({ silent: true }), 3000)
+    : null;
+}
+document.addEventListener('visibilitychange', () => setAuto(autoWanted));
+
+// ---------------------------------------------------------------- 事件
+$('#refresh').onclick = () => refresh();
+$('#auto').onchange = (e) => setAuto(e.target.checked);
+
+$('#save').onclick = async () => {
+  let updates;
+  try { updates = collectConfig(); }
+  catch (err) { toast('JSON 解析失败', err.message, 'bad'); return; }
+  if (!Object.keys(updates).length) { toast('没有改动', '表单与当前配置一致。'); return; }
+  try {
+    const res = await call('/admin/config', { method: 'PUT', body: updates });
+    const lines = [];
+    if (res.applied_now.length) lines.push('立即生效：' + res.applied_now.join('、'));
+    if (res.restart_required.length) lines.push('重启后生效：' + res.restart_required.join('、'));
+    (res.side_effects || []).forEach((s) => lines.push(s));
+    toast('已保存', lines.join('\n') || '没有字段发生变化。', res.restart_required.length ? '' : 'ok');
+    configCache = null;
+    await refresh({ silent: true });
+  } catch (err) {
+    toast('保存失败', err.message, 'bad');
+  }
+};
+
+$('#reload').onclick = async () => {
+  configCache = null;
+  try { renderConfig(await call('/admin/config')); toast('已还原表单', '显示的是当前生效的配置，不是磁盘上的。'); }
+  catch (err) { toast('读取配置失败', err.message, 'bad'); }
+};
+
+$('#preload').onclick = async (e) => {
+  e.target.disabled = true;
+  try {
+    toast('开始加载', '权重没在本地缓存的话，这一步会去 Hugging Face 下载，可能要几分钟。');
+    const res = await call('/admin/models/preload', { method: 'POST' });
+    toast('加载完成', `耗时 ${res.elapsed_s}s`, 'ok');
+  } catch (err) {
+    toast('加载失败', err.message, 'bad');
+  } finally { e.target.disabled = false; refresh({ silent: true }); }
+};
+
+$('#unload').onclick = async () => {
+  try {
+    await call('/admin/models/unload', { method: 'POST', body: { model: null } });
+    toast('已卸载全部权重', '下一个请求会重新加载。', 'ok');
+  } catch (err) { toast('卸载失败', err.message, 'bad'); }
+  refresh({ silent: true });
+};
+
+$('#models').addEventListener('click', async (e) => {
+  const preloadBtn = e.target.closest('[data-preload]');
+  const unloadBtn = e.target.closest('[data-unload]');
+  try {
+    if (preloadBtn) {
+      preloadBtn.disabled = true;
+      const label = preloadBtn.textContent;
+      preloadBtn.textContent = '加载中…';
+      // 权重没缓存时这一步会去 Hugging Face（或配置的镜像）下载，可能好几分钟。
+      // 按钮一直转是预期行为，不是卡死。
+      const res = await call('/admin/models/load', {
+        method: 'POST', body: { model: preloadBtn.dataset.preload },
+      });
+      toast('已加载', `${res.loaded}（${res.elapsed_s}s）`, 'ok');
+      preloadBtn.textContent = label;
+    } else if (unloadBtn) {
+      await call('/admin/models/unload', { method: 'POST', body: { model: unloadBtn.dataset.unload } });
+      toast('已卸载', unloadBtn.dataset.unload, 'ok');
+    }
+  } catch (err) {
+    toast('操作失败', err.message, 'bad');
+  }
+  refresh({ silent: true });
+});
+
+$('#reset-stats').onclick = async () => {
+  if (!confirm('清空已收集的请求统计？这只影响控制台看到的数据。')) return;
+  try { await call('/admin/stats/reset', { method: 'POST' }); toast('已清空', '', 'ok'); }
+  catch (err) { toast('清空失败', err.message, 'bad'); }
+  refresh({ silent: true });
+};
+
+$('#shutdown').onclick = async () => {
+  if (!confirm('确定停止服务？停止后这个页面会失去响应，需要重新启动才能恢复。')) return;
+  try {
+    await call('/admin/shutdown', { method: 'POST' });
+    toast('正在停止…', '这个页面马上会断开，可以关掉了。');
+    $('#status-pill').className = 'pill bad';
+    $('#status-text').textContent = '已停止';
+    setAuto(false);
+    // 应用窗口模式下试着自己关掉。Chrome 只允许脚本关闭由脚本打开的窗口，
+    // 所以多半不成功 —— 不成功也没关系，上面的提示已经把话说清楚了。
+    setTimeout(() => { try { window.close(); } catch (e) { /* 被拦了，正常 */ } }, 1200);
+  } catch (err) { toast('停止失败', err.message, 'bad'); }
+};
+
+setAuto(true);
+refresh();
+</script>
+</body>
+</html>

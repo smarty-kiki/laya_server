@@ -1,0 +1,24 @@
+{
+  "model": "laya-multilingual",
+  "state": "发票被重复扣款了，已经三天了还没处理，麻烦尽快退款。",
+  "questions": {
+    "department": {
+      "type": "choice",
+      "instructions": "Which team should handle this request?",
+      "criteria": {
+        "billing": "invoices, payments, refunds",
+        "technical": "bugs and outages",
+        "sales": "new purchases"
+      }
+    },
+    "urgency": {
+      "type": "score",
+      "instructions": "How urgent is this request?",
+      "criteria": ["not urgent", "soon", "critical"]
+    },
+    "refund": {
+      "type": "noul",
+      "instructions": "Does the customer ask for money back?"
+    }
+  }
+}

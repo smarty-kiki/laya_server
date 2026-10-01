@@ -1,0 +1,8 @@
+# 运行时 + 开发依赖。等价于 `pip install -e ".[dev]"`，
+# 但不想装成本包时可以直接 `pip install -r requirements-dev.txt`。
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.7
+laya-mlx>=0.2.0
+pytest>=8.0
+httpx>=0.27
