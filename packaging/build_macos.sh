@@ -30,6 +30,12 @@ echo "▸ 确认打包依赖"
 echo "▸ 清理旧产物"
 rm -rf "$REPO/build" "$REPO/dist"
 
+echo "▸ 生成应用图标"
+# 从 assets/icon 的母版重建 packaging/LayaServer.icns（中间产物落在 build/ 下）。
+# 仓库里提交了一份生成好的，这里再跑一次是为了保证它与母版同步 —— 改了母版却忘了
+# 重跑 make_icon.py，图标会静默地留在旧版本，而且没有任何报错。
+"$PY" packaging/make_icon.py
+
 echo "▸ 跑测试（打包前先确认代码本身是好的）"
 "$PY" -m pytest -q
 

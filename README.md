@@ -419,6 +419,22 @@ packaging/build_macos.sh --dmg
 不管走哪条路，三条都躲不掉：**必须 Apple Silicon**（MLX 只有 arm64 构建）、
 **macOS 14+**、**首次要下 ~2.2GB 权重**（国内基本要配 `hf_endpoint` 镜像）。
 
+### 应用图标
+
+母版是 `assets/icon/laya-server-icon-1024.png`（1024 满幅方图）。`make_icon.py` 负责
+把它变成能用的 `.icns` —— macOS 不会像 iOS 那样自动给图标加圆角遮罩，所以「824 图标体
+＋连续曲率圆角＋居中留白」这一层必须画进图里，否则 Dock 里就是个方角黑块：
+
+```bash
+.venv/bin/python packaging/make_icon.py            # → packaging/LayaServer.icns
+.venv/bin/python packaging/make_icon.py 别的图.png   # 换一张母版重新生成
+```
+
+生成的 `packaging/LayaServer.icns` 已随仓库提交，两个打包脚本都直接引用它。
+`build_macos.sh` 每次打包前会重新生成一遍（保证跟母版同步）；`make_macos_app.sh`
+**不会** —— 它要保住「零额外依赖、秒级完成」，而重建图标需要 Pillow。
+改了母版就手动重跑一次上面那行。
+
 ---
 
 ## 常见问题

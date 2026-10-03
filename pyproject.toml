@@ -23,8 +23,8 @@ native = [
     "pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'",
     "pyobjc-framework-WebKit>=10.0; sys_platform == 'darwin'",
 ]
-# 打包成 .app/.dmg。
-packaging = ["pyinstaller>=6.6.0"]
+# 打包成 .app/.dmg，以及从母版图生成 .icns（packaging/make_icon.py）。
+packaging = ["pyinstaller>=6.6.0", "pillow>=10.0"]
 
 [project.scripts]
 laya-server = "laya_server.cli:main"

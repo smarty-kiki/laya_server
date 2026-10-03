@@ -42,6 +42,17 @@ fi
 
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
+# 图标：直接用仓库里提交好的 .icns，不在这里重建。这个脚本的卖点是「零额外依赖、
+# 秒级完成」，而重建图标要拉 Pillow —— 为了一个图标破掉这个承诺不划算。
+# 改了母版就手动跑一次：.venv/bin/python packaging/make_icon.py
+ICNS="$REPO/packaging/LayaServer.icns"
+if [[ -f "$ICNS" ]]; then
+  cp "$ICNS" "$APP/Contents/Resources/LayaServer.icns"
+else
+  echo "! 没找到 $ICNS，生成的应用会用系统默认图标。" >&2
+  echo "   重建：.venv/bin/python packaging/make_icon.py" >&2
+fi
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -51,6 +62,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleDisplayName</key><string>Laya Server</string>
   <key>CFBundleIdentifier</key><string>ai.laya.server.console</string>
   <key>CFBundleExecutable</key><string>launch</string>
+  <key>CFBundleIconFile</key><string>LayaServer</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
   <key>CFBundleVersion</key><string>0.1.0</string>
