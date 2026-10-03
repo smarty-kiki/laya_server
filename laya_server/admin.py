@@ -34,7 +34,7 @@ from .stats import StatsCollector
 from .sysinfo import SystemMonitor
 
 SERVICE_NAME = "laya-server"
-SERVICE_VERSION = "0.1.0"
+SERVICE_VERSION = "0.1.1"
 
 #: 字段的中文标签。没列到的按字段名显示——与其编一个不准确的译名，不如让原始名字露出来。
 FIELD_LABELS: Dict[str, str] = {
