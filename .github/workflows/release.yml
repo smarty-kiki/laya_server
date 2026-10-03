@@ -1,0 +1,133 @@
+# 推 tag（v*）→ 在 macOS runner 上构建 .dmg 并发布 GitHub Release。
+#
+# 构建走 packaging/build_macos.sh，和本地打包是同一条路径 —— 脚本自带两道闸：
+# 先跑完整 pytest，再校验 mlx 原生件（core.so / libmlx.dylib / mlx.metallib）
+# 确实进了产物。发布前这里再补一道默认层冒烟（不需要权重，CI 里跑得动）。
+#
+# 签名现状：没有 Developer ID 证书，脚本会退回 ad-hoc 签名。自己人用没问题，
+# 但别人机器上首次打开会被 Gatekeeper 拦。要转正式分发得在这里补两步：把证书
+# 从 secrets 导入 runner 钥匙串、设 MAC_SIGN_ID / NOTARY_PROFILE —— 目前都没有。
+#
+# 想先空跑一遍（只构建 + 冒烟，不发 Release，dmg 传成 artifact）：Actions 页手动触发。
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write  # gh release create 需要
+
+jobs:
+  release:
+    name: 构建 dmg 并发布
+    # MLX 只有 arm64 构建，跟 ci.yml 同理，必须 macOS。
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # 要完整历史，下一步才能判断 tag 是否落在 main 上。
+          fetch-depth: 0
+
+      - name: 确认 tag 在 main 上
+        # 防呆：tag 打在任意分支上都会触发这个 workflow，但发布只该从 main 发。
+        if: github.event_name == 'push'
+        run: |
+          git fetch --quiet origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+            echo "tag $GITHUB_REF_NAME 不在 main 上，先别发" >&2
+            exit 1
+          }
+
+      - uses: actions/setup-python@v7
+        with:
+          # 跟本机打包用的 .venv 对齐（3.13）；ci.yml 的测试矩阵里也含它。
+          python-version: "3.13"
+          cache: pip
+
+      - name: 确定版本号
+        # 版本号分散在四处（pyproject / __init__ / spec 的 BUNDLE / spec 的 Info.plist）。
+        # 发布前先对齐，免得出现「tag 是 v0.2.0、Info.plist 里还是 0.1.0」这种不会报错、
+        # 只会悄悄发错的错配。（想根治，可以把 spec 改成从 pyproject 读，以后只留一处。）
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            WANT="${GITHUB_REF_NAME#v}"    # v0.1.0 → 0.1.0
+          else
+            WANT=""                        # 空跑：只要求四处一致，版本以 pyproject 为准
+          fi
+          WANT="$WANT" python - <<'PY'
+          import os, pathlib, re, tomllib
+
+          def grab(path, pattern):
+              m = re.search(pattern, pathlib.Path(path).read_text())
+              assert m, f"{path} 里没找到版本号"
+              return m.group(1)
+
+          spec = "packaging/laya_server.spec"
+          found = {
+              "pyproject.toml": tomllib.loads(
+                  pathlib.Path("pyproject.toml").read_text()
+              )["project"]["version"],
+              "laya_server/__init__.py": grab(
+                  "laya_server/__init__.py", r'__version__ = "([^"]+)"'
+              ),
+              "spec BUNDLE": grab(spec, r'version="([^"]+)"'),
+              "spec Info.plist": grab(spec, r'CFBundleShortVersionString": "([^"]+)"'),
+          }
+          for where, value in found.items():
+              print(f"  {where}: {value}")
+          values = set(found.values())
+          assert len(values) == 1, f"版本号不一致：{found}"
+          version = values.pop()
+          want = os.environ["WANT"]
+          if want:
+              assert want == version, f"tag 是 {want}，仓库里写的是 {version}"
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write(f"VERSION={version}\n")
+          print(f"VERSION={version}")
+          PY
+
+      - name: 装依赖
+        # dev：打包脚本会自己先跑 pytest；native：原生壳的 pyobjc（spec 的
+        # hiddenimports 要收它）；packaging：pyinstaller + pillow（重生成 .icns 用）。
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -e ".[dev,native,packaging]"
+
+      - name: 打包（含 pytest 与 mlx 原生件校验）
+        # VERSION 上一步已写进环境，脚本直接捡起来用在 dmg 文件名上。
+        run: packaging/build_macos.sh --dmg
+
+      - name: 冒烟（默认层，不需要权重）
+        run: packaging/smoke_app.sh
+
+      - name: 发布 Release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > "$RUNNER_TEMP/notes.md" <<'EOF'
+          自包含的 macOS 应用（Apple Silicon，macOS 14+），不需要本机装 Python。
+
+          ⚠️ ad-hoc 签名、未公证：首次打开会被 Gatekeeper 拦（可能显示「已损坏」，
+          其实只是没签名）。打开方式二选一：
+
+          * 系统设置 → 隐私与安全性 → 滚到「安全性」点「仍要打开」；
+          * 或终端里：xattr -dr com.apple.quarantine /Applications/LayaServer.app
+
+          发布前跑过完整测试，产物做了默认层冒烟（起得来、控制台是 HTML、能停机）。
+          真实推理的冒烟（--mlx）需要在有本地权重的机器上手动做。
+          EOF
+          gh release create "$GITHUB_REF_NAME" dist/*.dmg \
+            --title "LayaServer $VERSION" \
+            --notes-file "$RUNNER_TEMP/notes.md"
+
+      - name: dmg 留档（空跑时）
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v7
+        with:
+          name: LayaServer-dmg
+          path: dist/*.dmg
+          retention-days: 7
