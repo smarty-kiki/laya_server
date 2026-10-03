@@ -115,7 +115,9 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name="LayaServer.app",
-    icon=None,  # 有图标就写路径进来，换成 .icns
+    # 图标由 packaging/make_icon.py 从 assets/icon/laya-server-icon-1024.png 生成，
+    # 已随仓库提交（build_macos.sh 每次打包前会重新生成一遍，保证跟母版一致）。
+    icon=str(REPO / "packaging" / "LayaServer.icns"),
     bundle_identifier="ai.laya.server.console",
     version="0.1.0",
     info_plist={
