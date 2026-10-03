@@ -1,0 +1,30 @@
+# 只能在 macOS 上跑：MLX 只有 arm64 构建，而 laya-mlx 依赖它。
+#
+# 测试本身离线（conftest 在任何模块导入前就把 LAYA_SERVER_HOME 和 HF_HUB_CACHE
+# 指到临时目录），不会下载任何权重，也不碰 runner 上碰巧存在的缓存。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: pytest · Python ${{ matrix.python-version }}
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 跟 pyproject 的 requires-python（>=3.11）对齐。
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: 安装依赖
+        run: pip install -e ".[dev,native]"
+      - name: 跑测试
+        run: pytest -q

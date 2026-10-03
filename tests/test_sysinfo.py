@@ -221,8 +221,14 @@ def test_snapshot_shape_on_this_machine():
 
     gpu = snapshot["gpu"]
     if gpu["available"]:
-        assert 0 <= gpu["percent"] <= 100
-        assert gpu["in_use_mb"] >= 0
-        assert gpu["cores"] >= 1
+        # 「可用」只保证至少抠到了一个字段，不保证是全套 —— 解析器有意支持部分
+        # 记录（见 test_parse_ioreg_survives_a_partial_record）。虚拟机上的半虚拟化
+        # GPU 就只给显存、不给利用率，所以逐字段判断，别整块假设全套都在。
+        if "percent" in gpu:
+            assert 0 <= gpu["percent"] <= 100
+        if "in_use_mb" in gpu:
+            assert gpu["in_use_mb"] >= 0
+        if "cores" in gpu:
+            assert gpu["cores"] >= 1
 
     assert snapshot["notes"], "口径说明要给出来，否则没人知道这些数字怎么算的"

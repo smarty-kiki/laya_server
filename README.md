@@ -1,5 +1,9 @@
 # laya-server
 
+[![CI](https://github.com/smarty-kiki/laya_server/actions/workflows/ci.yml/badge.svg)](https://github.com/smarty-kiki/laya_server/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+
 把 TypeSafe Jev 的 `POST /v1/systemone` 搬到本机。Apple Silicon 上用
 [`laya-mlx`](https://pypi.org/project/laya-mlx/) 跑 Laya 的类型化决策模型，
 **权重与推理全部在本机，0 次云端调用**。
@@ -533,11 +537,14 @@ Apple M1 / 16GB / 三份权重全部驻留（约 2.2GB）实测：
 .venv/bin/python -m pytest -q          # 161 个测试，离线可跑，不下载任何权重
 ```
 
+CI（`.github/workflows/ci.yml`）在 macOS 上对 Python 3.11 / 3.12 / 3.13 各跑一遍同一套
+测试 —— 同样的离线测试，不下载权重。
+
 模型准不准不在测试里量 —— 那要用真实权重和真实样本量去跑，而且得用你自己的数据。
 
 ---
 
 ## 许可
 
-Apache-2.0。Laya 权重与上游 prompt 构造来自 Convai Innovations 及贡献者；
+Apache-2.0（全文见 [LICENSE](LICENSE)）。Laya 权重与上游 prompt 构造来自 Convai Innovations 及贡献者；
 `laya-mlx` 是独立 MLX 移植，非 Convai 官方发布。

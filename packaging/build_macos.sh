@@ -94,7 +94,7 @@ if [[ "$WANT_DMG" == "1" ]]; then
   echo "▸ 生成 dmg"
   VERSION="${VERSION:-0.1.0}"
   ARCH="$(uname -m)"
-  DMG="$REPO/dist/LayaServer-macos-$ARCH.dmg"
+  DMG="$REPO/dist/LayaServer-$VERSION-macos-$ARCH.dmg"
   rm -f "$DMG"
   hdiutil create -volname "LayaServer" -srcfolder "$APP" -ov -format UDZO "$DMG"
   echo "✓ $DMG"
