@@ -1,4 +1,4 @@
-"""本机资源占用：CPU / 内存 / GPU / MLX 显存。
+"""本机与服务进程的资源占用：CPU / 内存 / GPU / MLX 显存。
 
 只做 macOS。这是刻意的：这个服务的推理后端是 MLX，而 MLX 只在 Apple Silicon
 上有意义；与其写一堆跨平台分支再声称它们可用，不如把「读不到」明确说出来。
@@ -8,15 +8,15 @@
 1. GPU 利用率 psutil 根本拿不到（它没有 Metal 的概念），一定要自己读
    IOAccelerator。既然 GPU 必须自己解析，再为 CPU/内存多引一个 C 扩展依赖
    （安装、架构、wheel 三件麻烦事）就不划算了。
-2. 系统自带接口已经够用，而且更快：CPU 用 mach 调用是微秒级，比任何
-   「起个 `ps` 再解析输出」的方案都准 —— 后面那种还得等采样间隔。
+2. 系统自带接口已经够用，而且更快：整机 CPU 走 mach 调用是微秒级，进程取数走
+   libproc —— `ps` 和活动监视器自己用的就是它，我们只是直接调库，不起子进程。
 
-四类数据源，各自的特点写在对应函数上：
+五类数据源，各自的特点写在对应函数上：
 
-    mach host_statistics    CPU 累计 tick → 求增量得使用率。微秒级
-    mach task_info          本进程 RSS。比 `ps` 直接，也不用起子进程
+    mach host_statistics    整机 CPU 累计 tick → 求增量得使用率。微秒级
+    libproc                 本进程累计 CPU 时间 / RSS / phys_footprint，ps 同源
     sysctl / vm_stat        整机内存与 swap
-    ioreg                   GPU 利用率与显存。约 90ms，所以带 TTL 缓存
+    ioreg                   GPU 利用率与显存（整机）。约 90ms，所以带 TTL 缓存
     mlx.core                模型真实占用。只有导入过 mlx 才有
 
 采集一律**尽力而为**：任何一项失败就那一项标 `available: false`，其余照常返回。
@@ -193,7 +193,7 @@ def parse_ioreg_accelerator(text: str) -> Optional[Dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# mach 调用：CPU tick 与本进程内存
+# mach 调用：整机 CPU tick
 # ---------------------------------------------------------------------------
 
 
@@ -201,34 +201,10 @@ class _HostCpuLoadInfo(ctypes.Structure):
     _fields_ = [("cpu_ticks", ctypes.c_uint32 * 4)]
 
 
-class _TimeValue(ctypes.Structure):
-    _fields_ = [("seconds", ctypes.c_int32), ("microseconds", ctypes.c_int32)]
-
-
-class _MachTaskBasicInfo(ctypes.Structure):
-    _fields_ = [
-        ("virtual_size", ctypes.c_uint64),
-        ("resident_size", ctypes.c_uint64),
-        ("resident_size_max", ctypes.c_uint64),
-        ("user_time", _TimeValue),
-        ("system_time", _TimeValue),
-        ("policy", ctypes.c_int32),
-        ("suspend_count", ctypes.c_int32),
-    ]
-
-
 class MachReader:
-    """所有 mach 调用集中在这里，加载失败就整体标成不可用。
-
-    为什么不用 `ps` / `top`：
-
-      * 起子进程是几十毫秒，而这两项都是每次采样都要读的；
-      * `ps` 给的是「进程平均 %cpu」，不是瞬时值；要瞬时就只能调两次再自己算差，
-        那不如直接用内核给的 tick 计数器。
-    """
+    """整机 CPU 的 mach 调用集中在这里，加载失败就整体标成不可用。"""
 
     HOST_CPU_LOAD_INFO = 3
-    MACH_TASK_BASIC_INFO = 20
     CPU_STATE_MAX = 4
     STATE_USER, STATE_SYSTEM, STATE_IDLE, STATE_NICE = range(4)
 
@@ -242,15 +218,6 @@ class MachReader:
             lib.mach_host_self.argtypes = []
             lib.host_statistics.restype = ctypes.c_int
             lib.host_statistics.argtypes = [
-                ctypes.c_uint32,
-                ctypes.c_int,
-                ctypes.c_void_p,
-                ctypes.POINTER(ctypes.c_uint32),
-            ]
-            lib.mach_task_self.restype = ctypes.c_uint32
-            lib.mach_task_self.argtypes = []
-            lib.task_info.restype = ctypes.c_int
-            lib.task_info.argtypes = [
                 ctypes.c_uint32,
                 ctypes.c_int,
                 ctypes.c_void_p,
@@ -292,34 +259,182 @@ class MachReader:
             "total": sum(ticks),
         }
 
-    def task_memory(self) -> Optional[Dict[str, float]]:
-        """本进程的常驻内存（RSS）。
+# ---------------------------------------------------------------------------
+# libproc：本进程 CPU 与内存
+# ---------------------------------------------------------------------------
+#
+# 进程取数走 libproc（`ps` / 活动监视器同源），**不要**走 mach 的
+# task_info(MACH_TASK_BASIC_INFO)：在 macOS 26 上实测，它的 CPU 时间字段在
+# 进程正用着 CPU 的时候会返回 0 —— 烧一个核，连续 6 次读取全是 0.00s（同一
+# 时刻 `ps -o time=` 一路正常增长到 0:07.60），停火后同一次调用才把累计的
+# 7.3 秒补出来。拿它做实时采样是死的，换成 libproc 后逐秒读数完全正常。
+#
+# 两个调用各管一头：
+#   proc_pidinfo(PROC_PIDTASKINFO)  累计 CPU 时间（mach 时钟 tick）与 RSS
+#   proc_pid_rusage(RUSAGE_INFO_V6) phys_footprint —— 活动监视器口径。
+#       MLX 的 Metal 缓冲只有这个口径记得到：实测分配 256MB，RSS 只涨 2.6MB，
+#       phys_footprint 涨 258MB。拿 RSS 当「服务内存」会在加载模型后严重低报。
 
-        比 `ps -o rss=` 直接：不起子进程，而且拿到的是内核记的当前值。
+
+class _MachTimebase(ctypes.Structure):
+    _fields_ = [("numer", ctypes.c_uint32), ("denom", ctypes.c_uint32)]
+
+
+class _ProcTaskInfo(ctypes.Structure):
+    """sys/proc_info.h 的 proc_taskinfo，96 字节。字段顺序照抄头文件。"""
+
+    _fields_ = [
+        ("pti_virtual_size", ctypes.c_uint64),
+        ("pti_resident_size", ctypes.c_uint64),
+        ("pti_total_user", ctypes.c_uint64),
+        ("pti_total_system", ctypes.c_uint64),
+        ("pti_threads_user", ctypes.c_uint64),
+        ("pti_threads_system", ctypes.c_uint64),
+        ("pti_policy", ctypes.c_int32),
+        ("pti_faults", ctypes.c_int32),
+        ("pti_pageins", ctypes.c_int32),
+        ("pti_cow_faults", ctypes.c_int32),
+        ("pti_messages_sent", ctypes.c_int32),
+        ("pti_messages_received", ctypes.c_int32),
+        ("pti_syscalls_mach", ctypes.c_int32),
+        ("pti_syscalls_unix", ctypes.c_int32),
+        ("pti_csw", ctypes.c_int32),
+        ("pti_threadnum", ctypes.c_int32),
+        ("pti_numrunning", ctypes.c_int32),
+        ("pti_priority", ctypes.c_int32),
+    ]
+
+
+#: rusage_info_v6 里 uuid 之后的字段名，顺序照抄 sys/resource.h。声明到
+#: ri_lifetime_max_phys_footprint 为止就够用，剩下的用占位数组顶住 —— 总大小
+#: 对了，内核按固定布局填，关心的字段偏移就不会错。
+_RUSAGE_V6_FIELDS = (
+    "ri_user_time",
+    "ri_system_time",
+    "ri_pkg_idle_wkups",
+    "ri_interrupt_wkups",
+    "ri_pageins",
+    "ri_wired_size",
+    "ri_resident_size",
+    "ri_phys_footprint",
+    "ri_proc_start_abstime",
+    "ri_proc_exit_abstime",
+    "ri_child_user_time",
+    "ri_child_system_time",
+    "ri_child_pkg_idle_wkups",
+    "ri_child_interrupt_wkups",
+    "ri_child_pageins",
+    "ri_child_elapsed_abstime",
+    "ri_diskio_bytesread",
+    "ri_diskio_byteswritten",
+    "ri_cpu_time_qos_default",
+    "ri_cpu_time_qos_maintenance",
+    "ri_cpu_time_qos_background",
+    "ri_cpu_time_qos_utility",
+    "ri_cpu_time_qos_legacy",
+    "ri_cpu_time_qos_user_initiated",
+    "ri_cpu_time_qos_user_interactive",
+    "ri_billed_system_time",
+    "ri_serviced_system_time",
+    "ri_logical_writes",
+    "ri_lifetime_max_phys_footprint",
+)
+
+
+class _RusageInfoV6(ctypes.Structure):
+    _fields_ = (
+        [("ri_uuid", ctypes.c_uint8 * 16)]
+        + [(name, ctypes.c_uint64) for name in _RUSAGE_V6_FIELDS]
+        + [("_reserved", ctypes.c_uint64 * 27)]
+    )
+
+
+class LibprocReader:
+    """本进程的 CPU 与内存。加载失败就整体标成不可用。
+
+    为什么不用 `ps` / `top` 命令：起子进程是几十到几百毫秒，而这两项每次采样
+    都要读；而且命令输出是给人看的，字段会随系统版本变。libproc 是同一份数据
+    的内核接口，直接用。
+    """
+
+    PROC_PIDTASKINFO = 4
+    RUSAGE_INFO_V6 = 6
+
+    def __init__(self) -> None:
+        self._lib = None
+        self._timebase = None
+        if platform.system() != "Darwin":
+            return
+        try:
+            lib = ctypes.CDLL(ctypes.util.find_library("proc") or "libproc.dylib")
+            lib.proc_pidinfo.restype = ctypes.c_int
+            lib.proc_pidinfo.argtypes = [
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_uint64,
+                ctypes.c_void_p,
+                ctypes.c_int,
+            ]
+            lib.proc_pid_rusage.restype = ctypes.c_int
+            lib.proc_pid_rusage.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+            system = ctypes.CDLL(
+                ctypes.util.find_library("System") or "libSystem.B.dylib"
+            )
+            system.mach_timebase_info.restype = ctypes.c_int
+            system.mach_timebase_info.argtypes = [ctypes.POINTER(_MachTimebase)]
+        except (OSError, AttributeError):
+            return
+        # pti 的时间是 mach 时钟 tick，要换算成秒。取不到 timebase 也照样
+        # 返回内存，只是 CPU 那几项为 None —— 不猜一个系数出来用。
+        tb = _MachTimebase()
+        if system.mach_timebase_info(ctypes.byref(tb)) == 0 and tb.denom:
+            self._timebase = (tb.numer, tb.denom)
+        self._lib = lib
+
+    @property
+    def available(self) -> bool:
+        return self._lib is not None
+
+    def proc_stats(self) -> Optional[Dict[str, Any]]:
+        """本进程的累计 CPU 时间与内存。
+
+        `_cpu_total_s` 是给增量算 CPU% 用的完整精度值，调用方取走后再拼 payload。
         """
         if self._lib is None:
             return None
-        info = _MachTaskBasicInfo()
-        count = ctypes.c_uint32(ctypes.sizeof(_MachTaskBasicInfo) // 4)
-        rc = self._lib.task_info(
-            self._lib.mach_task_self(),
-            self.MACH_TASK_BASIC_INFO,
-            ctypes.byref(info),
-            ctypes.byref(count),
-        )
-        if rc != 0:
+        pid = os.getpid()
+
+        info = _ProcTaskInfo()
+        if self._lib.proc_pidinfo(
+            pid, self.PROC_PIDTASKINFO, 0, ctypes.byref(info), ctypes.sizeof(info)
+        ) != ctypes.sizeof(info):
             return None
-        return {
-            "resident_mb": _mb(info.resident_size),
-            "peak_mb": _mb(info.resident_size_max),
-            "virtual_mb": _mb(info.virtual_size),
-            "cpu_user_s": round(
-                info.user_time.seconds + info.user_time.microseconds / 1e6, 2
-            ),
-            "cpu_system_s": round(
-                info.system_time.seconds + info.system_time.microseconds / 1e6, 2
-            ),
+        usage = _RusageInfoV6()
+        if self._lib.proc_pid_rusage(pid, self.RUSAGE_INFO_V6, ctypes.byref(usage)) != 0:
+            return None
+
+        stats: Dict[str, Any] = {
+            "resident_mb": _mb(info.pti_resident_size),
+            "footprint_mb": _mb(usage.ri_phys_footprint),
+            "peak_footprint_mb": _mb(usage.ri_lifetime_max_phys_footprint),
         }
+        if self._timebase is None:
+            stats.update(cpu_user_s=None, cpu_system_s=None, _cpu_total_s=None)
+            return stats
+
+        numer, denom = self._timebase
+
+        def to_seconds(ticks: int) -> float:
+            return ticks * numer / denom / 1e9
+
+        user = to_seconds(info.pti_total_user)
+        system = to_seconds(info.pti_total_system)
+        stats.update(
+            cpu_user_s=round(user, 2),
+            cpu_system_s=round(system, 2),
+            _cpu_total_s=round(user + system, 3),
+        )
+        return stats
 
 
 # ---------------------------------------------------------------------------
@@ -330,9 +445,9 @@ class MachReader:
 def _mlx_memory() -> Dict[str, Any]:
     """MLX 自己记的显存占用。
 
-    这是整个面板里**唯一**能回答「模型到底吃了多少」的数字：系统层面看到的只是
-    进程 RSS，里面混着 Python 堆、tokenizer、各种缓存；MLX 记的是它实际持有的
-    Metal 缓冲。
+    这是整个面板里**唯一**能回答「模型到底吃了多少」的数字：系统层面只能看到
+    进程总账（phys_footprint），里面混着 Python 堆、tokenizer、各种缓存；
+    MLX 记的是它实际持有的 Metal 缓冲。
 
     Apple Silicon 是统一内存，没有独立显存 —— 这个数字和「内存」是同一块物理内存，
     只是归属不同，**不要把它和内存读数相加**。
@@ -401,13 +516,19 @@ class SystemMonitor:
         self._cached: Optional[Dict[str, Any]] = None
         self._cached_at = 0.0
         self._mach = MachReader()
+        self._libproc = LibprocReader()
         self._prev_ticks: Optional[Dict[str, int]] = None
         self._prev_ticks_at = 0.0
+        self._prev_proc_cpu_s: Optional[float] = None
+        self._prev_proc_cpu_at = 0.0
         if prime:
-            # 启动时先读一次 tick：控制台通常几秒后才第一次轮询，那时两次读数
-            # 一相减就有真实的使用率，用户不会看到一格「—」。
+            # 启动时先把两个参照都读一遍：控制台通常几秒后才第一次轮询，那时
+            # 两次读数一相减就有真实的使用率，用户不会看到一格「—」。
             self._prev_ticks = self._mach.cpu_ticks()
             self._prev_ticks_at = time.monotonic()
+            started = self._libproc.proc_stats() or {}
+            self._prev_proc_cpu_s = started.get("_cpu_total_s")
+            self._prev_proc_cpu_at = time.monotonic()
 
     # ------------------------------------------------------------------ 对外
     def snapshot(self) -> Dict[str, Any]:
@@ -431,10 +552,12 @@ class SystemMonitor:
             "gpu": _safe(_gpu_block),
             "mlx": _safe(_mlx_memory),
             "notes": [
-                "Apple Silicon 是统一内存：这里没有独立的「显存」，"
-                "MLX 显存指的是它持有的那部分内存，不要和内存读数相加。",
-                "内存口径：已用 = 应用内存（匿名页 - 可回收页）+ 有线内存 + 压缩内存，"
-                "与活动监视器的「已用内存」接近；不是简单的「总量 - 空闲」。",
+                "服务 CPU / 内存取的是 laya 进程自己的占用：CPU 是进程累计时间的"
+                "增量（多线程会超过 100%），内存是 phys_footprint（活动监视器同口径），"
+                "MLX 持有的那部分内存也在里面 —— 不要和「MLX 显存」相加，"
+                "它们是同一块统一内存的总账与模型账。",
+                "GPU 利用率是整机的：系统没有提供按进程的 GPU 占用接口；"
+                "推理跑起来时这个数基本就是这个服务打上去的。",
             ],
         }
 
@@ -504,14 +627,45 @@ class SystemMonitor:
         return block
 
     def _process_block(self) -> Dict[str, Any]:
-        memory = self._mach.task_memory()
-        if memory is None:
+        stats = self._libproc.proc_stats()
+        if stats is None:
             return {
                 "available": False,
-                "reason": "只有 macOS 支持（走 mach task_info）",
+                "reason": "只有 macOS 支持（走 libproc）",
                 "pid": os.getpid(),
             }
-        return {"available": True, "pid": os.getpid(), **memory}
+
+        read_at = time.monotonic()
+        total = stats.pop("_cpu_total_s", None)
+        previous, previous_at = self._prev_proc_cpu_s, self._prev_proc_cpu_at
+        # 和整机 CPU 同样的窗口规则：参照太近（进程刚起来）或太远（面板几小时
+        # 没打开）就临时起一个 0.5 秒的窗口再读一次 —— 宁可晚半秒，也不给
+        # 用户一格看不出是「0%」还是「没数据」的「—」。
+        if total is not None and (
+            previous is None or not _MIN_WINDOW_S <= read_at - previous_at <= _MAX_WINDOW_S
+        ):
+            time.sleep(_MIN_WINDOW_S)
+            again = self._libproc.proc_stats()
+            if again is not None:
+                previous, previous_at = total, read_at
+                stats = again
+                total = again.pop("_cpu_total_s", None)
+                read_at = time.monotonic()
+
+        self._prev_proc_cpu_s, self._prev_proc_cpu_at = total, read_at
+        span = read_at - previous_at
+
+        block: Dict[str, Any] = {"available": True, "pid": os.getpid(), **stats}
+        # 进程可以多线程，超出 100% 是正常读数（top 同款口径），不做截断。
+        block["cpu_percent"] = (
+            round(100.0 * (total - previous) / span, 1)
+            if total is not None
+            and previous is not None
+            and _MIN_WINDOW_S <= span <= _MAX_WINDOW_S
+            else None
+        )
+        block["window_s"] = round(span, 2) if previous is not None else None
+        return block
 
 
 def _host_block(sysctl: Dict[str, str]) -> Dict[str, Any]:
@@ -593,6 +747,7 @@ def _gpu_block() -> Dict[str, Any]:
 
 __all__ = [
     "DEFAULT_TTL",
+    "LibprocReader",
     "MachReader",
     "SystemMonitor",
     "parse_ioreg_accelerator",

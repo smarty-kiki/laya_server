@@ -3,6 +3,6 @@
 from .app import create_app
 from .config import Settings, load_settings
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 __all__ = ["Settings", "create_app", "load_settings", "__version__"]

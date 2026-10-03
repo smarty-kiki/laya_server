@@ -305,22 +305,26 @@ const SYS_INTERVAL_S = 3;   // 与控制台轮询间隔一致
 let sysHistory = [];
 
 function renderSystem(sys) {
-  const host = sys.host || {}, cpu = sys.cpu || {}, mem = sys.memory || {};
+  const host = sys.host || {};
   const gpu = sys.gpu || {}, mlx = sys.mlx || {}, proc = sys.process || {};
-  const cores = cpu.cores || host.cpu_cores;
+
+  // CPU / 内存是**服务自己的**占用，不是整机的：CPU 取进程累计时间的增量（多线程
+  // 会超过 100%），内存取 phys_footprint（活动监视器口径，MLX 的显存也在里面）。
+  // GPU 那一张是全机口径 —— 系统没有按进程的 GPU 接口，所以在标题里标出来。
+  const cpuTotal = proc.available
+    ? ((proc.cpu_user_s || 0) + (proc.cpu_system_s || 0)).toFixed(1) + 's'
+    : '';
 
   $('#sys-cards').innerHTML = cardsHtml([
-    ['CPU', cpu.available ? fmtPct(cpu.percent) : '—',
-      cpu.available
-        ? `${cores} 核 · 负载 ${(cpu.load || []).map((v) => v.toFixed(2)).join(' / ') || '—'}`
-        : (cpu.reason || '不可用')],
-    ['内存', mem.available ? `${fmtMB(mem.used_mb)} / ${fmtMB(mem.total_mb)}` : '—',
-      mem.available
-        ? `占用 ${fmtPct(mem.percent)} · 可用 ${fmtMB(mem.available_mb)}`
-        : (mem.reason || '不可用')],
-    ['GPU 利用率', gpu.available ? gpu.percent + '%' : '—',
+    ['服务 CPU', proc.available ? fmtPct(proc.cpu_percent) : '—',
+      proc.available ? `PID ${proc.pid} · 累计 ${cpuTotal}` : (proc.reason || '不可用')],
+    ['服务内存', proc.available ? fmtMB(proc.footprint_mb) : '—',
+      proc.available
+        ? `RSS ${fmtMB(proc.resident_mb)} · 峰值 ${fmtMB(proc.peak_footprint_mb)}`
+        : (proc.reason || '不可用')],
+    ['GPU 利用率（整机）', gpu.available ? gpu.percent + '%' : '—',
       // 副标题要短：卡片宽度有限，写「Apple M1 · 8 核 · 显存占用 …」会被截成省略号，
-      // 而芯片名和上面那张 CPU 卡片是同一个，没必要占地方。
+      // 而芯片名和标题栏是同一个，没必要占地方。
       gpu.available
         ? `${gpu.cores || '?'} 核 · 显存占用 ${fmtMB(gpu.in_use_mb)}`
         : (gpu.reason || '不可用')],
@@ -328,23 +332,20 @@ function renderSystem(sys) {
       mlx.available
         ? `峰值 ${fmtMB(mlx.peak_mb)} · 缓存 ${fmtMB(mlx.cache_mb)}`
         : '还没有加载任何权重'],
-    ['服务进程', proc.available ? fmtMB(proc.resident_mb) : '—',
-      proc.available ? `PID ${proc.pid} · 峰值 ${fmtMB(proc.peak_mb)}` : (proc.reason || '不可用')],
   ]);
 
   $('#sys-notes').textContent = (sys.notes || []).join('　');
-  // 标题栏顺手把芯片和采样时间写出来 —— 这些数字都是这台机器的，说清楚是哪台。
+  // 标题栏顺手把芯片和采样时间写出来 —— 服务跑在哪台机器上，说清楚是哪台。
   $('#sys-updated').textContent = [host.chip, sys.sampled_at ? '采样于 ' + fmtTime(sys.sampled_at) : '']
     .filter(Boolean).join(' · ');
 }
 
 function pushSystemHistory(sys) {
-  const cpu = sys.cpu || {}, gpu = sys.gpu || {}, mem = sys.memory || {};
+  const proc = sys.process || {}, gpu = sys.gpu || {};
   sysHistory.push({
     at: Date.now() / 1000,
-    cpu: cpu.available ? cpu.percent : null,
+    cpu: proc.available ? proc.cpu_percent : null,
     gpu: gpu.available ? gpu.percent : null,
-    mem: mem.available ? mem.percent : null,
   });
   if (sysHistory.length > SYS_POINTS) sysHistory = sysHistory.slice(-SYS_POINTS);
 }
@@ -359,7 +360,8 @@ function renderSystemChart() {
     return;
   }
   const plotH = H - bottom - pad;
-  // 三个系列都是百分比，共用 0–100 的同一根轴，可以直接互相比较。
+  // 两个系列都是百分比，共用 0–100 的同一根轴：蓝 = 服务 CPU，黄 = 整机 GPU。
+  // （没有「服务内存」的线：footprint 是 MB，混进百分比轴只会搅浑读数。）
   //
   // x 从**右往左**排：最新的点永远贴着右边缘，历史向左延伸。刚打开页面时点很少，
   // 如果按「从左往右铺满」画，前几个点会全挤在左边、看着像一条陡降的斜线。
@@ -375,7 +377,7 @@ function renderSystemChart() {
   }
 
   let paths = '';
-  for (const [key, color] of [['cpu', 'var(--accent)'], ['gpu', 'var(--warn)'], ['mem', 'var(--ok)']]) {
+  for (const [key, color] of [['cpu', 'var(--accent)'], ['gpu', 'var(--warn)']]) {
     let d = '', started = false;
     sysHistory.forEach((point, i) => {
       const value = point[key];

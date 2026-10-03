@@ -92,7 +92,7 @@ fi
 
 if [[ "$WANT_DMG" == "1" ]]; then
   echo "▸ 生成 dmg"
-  VERSION="${VERSION:-0.1.0}"
+  VERSION="${VERSION:-0.1.1}"
   ARCH="$(uname -m)"
   DMG="$REPO/dist/LayaServer-$VERSION-macos-$ARCH.dmg"
   rm -f "$DMG"

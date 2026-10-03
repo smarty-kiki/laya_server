@@ -9,13 +9,18 @@ macOS 版本走，把真实片段钉在这里，格式一变测试就红 —— 
 
 from __future__ import annotations
 
+import ctypes
 import platform
+import threading
 
 import pytest
 
 from laya_server.sysinfo import (
+    LibprocReader,
     MachReader,
     SystemMonitor,
+    _ProcTaskInfo,
+    _RusageInfoV6,
     parse_ioreg_accelerator,
     parse_swapusage,
     parse_vm_stat,
@@ -123,7 +128,31 @@ def test_mach_reader_is_unavailable_off_macos(monkeypatch):
     assert reader.available is False
     # 不可用时返回 None 而不是抛异常 —— 调用方按「这项没有」处理。
     assert reader.cpu_ticks() is None
-    assert reader.task_memory() is None
+
+
+def test_libproc_reader_is_unavailable_off_macos(monkeypatch):
+    monkeypatch.setattr("laya_server.sysinfo.platform.system", lambda: "Linux")
+    reader = LibprocReader()
+    assert reader.available is False
+    assert reader.proc_stats() is None
+
+
+def test_libproc_struct_layout_matches_the_sdk_headers():
+    """结构布局必须和 sys/resource.h、sys/proc_info.h 一字不差。
+
+    内核是按固定布局往缓冲里填字节的，错一个字段，读到的就是隔壁字段的值 ——
+    「内存 1.0MB」这种谁也看不出错的假数就是这么来的。这里的偏移量都是从
+    Xcode SDK 头文件里核出来的，以后改结构先回去对照头文件。
+    """
+    assert ctypes.sizeof(_ProcTaskInfo) == 96
+    assert _ProcTaskInfo.pti_resident_size.offset == 8
+    assert _ProcTaskInfo.pti_total_user.offset == 16
+    assert _ProcTaskInfo.pti_total_system.offset == 24
+
+    assert ctypes.sizeof(_RusageInfoV6) == 464
+    assert _RusageInfoV6.ri_resident_size.offset == 64
+    assert _RusageInfoV6.ri_phys_footprint.offset == 72
+    assert _RusageInfoV6.ri_lifetime_max_phys_footprint.offset == 240
 
 
 def test_a_failing_block_does_not_take_down_the_snapshot(monkeypatch):
@@ -218,6 +247,15 @@ def test_snapshot_shape_on_this_machine():
     process = snapshot["process"]
     assert process["available"] is True
     assert process["resident_mb"] > 0, "跑着测试的进程不可能不占内存"
+    # 「服务内存」用的是 phys_footprint（活动监视器口径），不是 RSS —— MLX 的
+    # Metal 缓冲只有它记得住（实测分配 256MB，RSS 只涨 2.6MB）。两者谁大谁小
+    # 没有定数（footprint 不含共享的只读页，可以比 RSS 小），各自为正即可。
+    assert process["footprint_mb"] > 0
+    assert process["peak_footprint_mb"] > 0
+    # 累计 CPU 走 libproc：task_info 在 macOS 26 上进程烧着 CPU 时读出来全是 0。
+    assert (process["cpu_user_s"] or 0) + (process["cpu_system_s"] or 0) > 0
+    assert process["cpu_percent"] is not None
+    assert process["window_s"] >= 0.5
 
     gpu = snapshot["gpu"]
     if gpu["available"]:
@@ -232,3 +270,35 @@ def test_snapshot_shape_on_this_machine():
             assert gpu["cores"] >= 1
 
     assert snapshot["notes"], "口径说明要给出来，否则没人知道这些数字怎么算的"
+
+
+@darwin_only
+def test_process_cpu_keeps_up_while_the_process_is_burning():
+    """进程真烧着 CPU 时，读数必须实时跟涨。
+
+    这是当年换掉 mach task_info 的直接原因：在 macOS 26 上，进程正烧核时
+    task_info 的 CPU 时间字段连续读出来一直是 0，停火后才把账补上 —— 拿它
+    做面板，就成了「推理时服务 CPU 显示 0%」的假表。libproc（ps 同源）没有
+    这个问题，这条测试把它钉住。
+    """
+    monitor = SystemMonitor(ttl=0)
+    stop = threading.Event()
+
+    def burn() -> None:
+        while not stop.is_set():
+            pass
+
+    thread = threading.Thread(target=burn, daemon=True)
+    thread.start()
+    try:
+        monitor.snapshot()  # 建立参照；这一步自己会垫 0.5 秒的采样窗
+        process = monitor.snapshot()["process"]
+    finally:
+        stop.set()
+        thread.join()
+
+    assert process["available"] is True, process.get("reason")
+    assert process["window_s"] >= 0.5
+    # 一个满负荷的 Python 线程接近一个核。GIL 会让它略低于 100%，
+    # 留足余量——只要能证明读数跟着烧核在动就行。
+    assert process["cpu_percent"] > 50.0, process

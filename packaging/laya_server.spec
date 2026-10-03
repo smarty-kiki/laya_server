@@ -119,11 +119,11 @@ app = BUNDLE(
     # 已随仓库提交（build_macos.sh 每次打包前会重新生成一遍，保证跟母版一致）。
     icon=str(REPO / "packaging" / "LayaServer.icns"),
     bundle_identifier="ai.laya.server.console",
-    version="0.1.0",
+    version="0.1.1",
     info_plist={
         "CFBundleName": "LayaServer",
         "CFBundleDisplayName": "Laya Server",
-        "CFBundleShortVersionString": "0.1.0",
+        "CFBundleShortVersionString": "0.1.1",
         "LSMinimumSystemVersion": "14.0",
         "NSHighResolutionCapable": True,
         # 关掉「未签名应用」的警告需要走签名+公证，见 build_macos.sh 的注释。
