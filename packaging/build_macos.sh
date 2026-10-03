@@ -96,7 +96,14 @@ if [[ "$WANT_DMG" == "1" ]]; then
   ARCH="$(uname -m)"
   DMG="$REPO/dist/LayaServer-$VERSION-macos-$ARCH.dmg"
   rm -f "$DMG"
-  hdiutil create -volname "LayaServer" -srcfolder "$APP" -ov -format UDZO "$DMG"
+  # 标准安装布局：.app 旁边放一个 /Applications 软链，用户拖一下就装好。
+  # 直接 -srcfolder "$APP" 的话 dmg 里只有孤零零一个 .app，得自己去找「应用程序」。
+  # （不做窗口摆位/背景图那些 .DS_Store 美化：那要开 Finder 去调，CI 无头环境里不可靠。）
+  STAGE="$(mktemp -d)"
+  trap 'rm -rf "$STAGE"' EXIT
+  ditto "$APP" "$STAGE/LayaServer.app"
+  ln -s /Applications "$STAGE/Applications"
+  hdiutil create -volname "LayaServer" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
   echo "✓ $DMG"
 fi
 
